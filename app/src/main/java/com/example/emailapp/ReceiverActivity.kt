@@ -1,34 +1,36 @@
 package com.example.emailapp
 
+import android.content.Context
+import android.graphics.Color
 import android.os.Bundle
+import android.util.Base64
+import android.view.View
+import android.widget.*
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import android.widget.*
-import java.security.*
+import com.google.android.material.card.MaterialCardView
+import java.security.KeyFactory
+import java.security.MessageDigest
+import java.security.PublicKey
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
-import android.util.Base64
-import java.security.MessageDigest
-import android.content.Context
-import android.content.SharedPreferences
-
 
 class ReceiverActivity : AppCompatActivity() {
-    private lateinit var receivedMessage: EditText
+    // These must match the XML types exactly
+    private lateinit var receivedMessage: TextView  // In XML this is a TextView
     private lateinit var receivedEncrypted: EditText
     private lateinit var pubKeyInput: EditText
-    private lateinit var decryptedResult: EditText
-    private lateinit var computedResult: EditText
+    private lateinit var decryptedHashView: EditText
+    private lateinit var computedHashView: EditText
     private lateinit var resultView: TextView
+    private lateinit var statusCard: MaterialCardView // Added this
 
     private lateinit var decryptButton: Button
     private lateinit var hashButton: Button
     private lateinit var compareButton: Button
 
-    private var decryptedHash: String = ""
-    private var computedHash: String = ""
     private var senderPublicKey: PublicKey? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,17 +38,18 @@ class ReceiverActivity : AppCompatActivity() {
         enableEdgeToEdge()
         setContentView(R.layout.activity_receiver)
 
-        // Initialize UI Elements
+        // 1. Initialize UI Elements (Names updated to match your XML)
         receivedMessage = findViewById(R.id.receivedMessage)
         receivedEncrypted = findViewById(R.id.receivedEncrypted)
         pubKeyInput = findViewById(R.id.pubKeyInput)
-        decryptedResult = findViewById(R.id.decryptedResult)
-        computedResult = findViewById(R.id.computedResult)
+        decryptedHashView = findViewById(R.id.decryptedHashView)
+        computedHashView = findViewById(R.id.computedHashView)
         resultView = findViewById(R.id.resultView)
+        statusCard = findViewById(R.id.statusCard)
 
-        decryptButton = findViewById(R.id.encrypt_button)
-        hashButton = findViewById(R.id.hash_button)
-        compareButton = findViewById(R.id.compare_button)
+        decryptButton = findViewById(R.id.btn_decrypt_sig)
+        hashButton = findViewById(R.id.btn_rehash)
+        compareButton = findViewById(R.id.verify_button)
 
         loadIntentData()
 
@@ -54,47 +57,46 @@ class ReceiverActivity : AppCompatActivity() {
         hashButton.setOnClickListener { hashMessage() }
         compareButton.setOnClickListener { compareHashes() }
 
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
+        // 2. Handle Insets (Make sure XML root has id="main")
+        val mainLayout = findViewById<View>(R.id.main)
+        if (mainLayout != null) {
+            ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { v, insets ->
+                val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+                v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+                insets
+            }
         }
     }
 
     private fun loadIntentData() {
         val sharedPrefs = getSharedPreferences("CryptoAppPrefs", Context.MODE_PRIVATE)
+        val phase = intent.getStringExtra("PHASE")
 
-        when (intent.getStringExtra("PHASE")) {
+        when (phase) {
             "KEY_ONLY" -> {
                 val publicKeyStr = intent.getStringExtra("PUBLIC_KEY")
                 if (!publicKeyStr.isNullOrEmpty()) {
-                    // 1. Save the key to SharedPreferences
                     sharedPrefs.edit().putString("STORED_PUBLIC_KEY", publicKeyStr).apply()
-
-                    // 2. Load it into memory
                     setupPublicKey(publicKeyStr)
-
                     pubKeyInput.setText(publicKeyStr)
-                    Toast.makeText(this, "Public key stored!", Toast.LENGTH_SHORT).show()
+                    resultView.text = "Status: Public Key Received"
                 }
             }
             "MESSAGE" -> {
-                receivedMessage.setText(intent.getStringExtra("MESSAGE"))
+                receivedMessage.text = intent.getStringExtra("MESSAGE")
                 receivedEncrypted.setText(intent.getStringExtra("SIGNATURE"))
 
-                // 3. Retrieve the key from SharedPreferences if it's not in memory
                 val savedKey = sharedPrefs.getString("STORED_PUBLIC_KEY", null)
                 if (!savedKey.isNullOrEmpty()) {
                     setupPublicKey(savedKey)
                     pubKeyInput.setText(savedKey)
                 } else {
-                    Toast.makeText(this, "Warning: No stored public key found!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "No stored public key found!", Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
 
-    // Helper function to convert String to PublicKey object
     private fun setupPublicKey(keyStr: String) {
         try {
             val keyBytes = Base64.decode(keyStr, Base64.DEFAULT)
@@ -104,7 +106,6 @@ class ReceiverActivity : AppCompatActivity() {
             e.printStackTrace()
         }
     }
-
 
     private fun decryptSignature() {
         if (senderPublicKey == null) {
@@ -116,38 +117,42 @@ class ReceiverActivity : AppCompatActivity() {
             cipher.init(Cipher.DECRYPT_MODE, senderPublicKey)
 
             val encryptedBytes = Base64.decode(receivedEncrypted.text.toString(), Base64.DEFAULT)
-            decryptedHash = String(cipher.doFinal(encryptedBytes), Charsets.UTF_8)
+            val decryptedHash = String(cipher.doFinal(encryptedBytes), Charsets.UTF_8)
 
-            // SHOW the result in the EditText result field
-            decryptedResult.setText(decryptedHash)
+            decryptedHashView.setText(decryptedHash)
             Toast.makeText(this, "Signature decrypted", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            decryptedResult.setText("Error: Decryption failed")
+            decryptedHashView.setText("Error: Decryption failed")
         }
     }
 
     private fun hashMessage() {
+        val messageText = receivedMessage.text.toString()
         val md = MessageDigest.getInstance("MD5")
-        val hashBytes = md.digest(receivedMessage.text.toString().toByteArray(Charsets.UTF_8))
-        computedHash = hashBytes.joinToString("") { "%02x".format(it) }
+        val hashBytes = md.digest(messageText.toByteArray(Charsets.UTF_8))
+        val computedHash = hashBytes.joinToString("") { "%02x".format(it) }
 
-        // SHOW the result in the EditText result field
-        computedResult.setText(computedHash)
+        computedHashView.setText(computedHash)
         Toast.makeText(this, "Message hashed", Toast.LENGTH_SHORT).show()
     }
 
     private fun compareHashes() {
-        if (decryptedHash.isEmpty() || computedHash.isEmpty()) {
+        val h1 = decryptedHashView.text.toString()
+        val h2 = computedHashView.text.toString()
+
+        if (h1.isEmpty() || h2.isEmpty()) {
             resultView.text = "Status: Error (Missing data)"
             return
         }
 
-        if (decryptedHash == computedHash) {
+        if (h1 == h2) {
             resultView.text = "Status: AUTHENTIC"
-            resultView.setTextColor(resources.getColor(android.R.color.holo_green_dark))
+            resultView.setTextColor(Color.parseColor("#2E7D32")) // Green
+            statusCard.setCardBackgroundColor(Color.parseColor("#C8E6C9"))
         } else {
-            resultView.text = "Status: MODIFIED"
-            resultView.setTextColor(resources.getColor(android.R.color.holo_red_dark))
+            resultView.text = "Status: MODIFIED / TAMPERED"
+            resultView.setTextColor(Color.parseColor("#C62828")) // Red
+            statusCard.setCardBackgroundColor(Color.parseColor("#FFCDD2"))
         }
     }
 }
